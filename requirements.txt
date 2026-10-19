@@ -1,0 +1,6 @@
+APScheduler==3.10.4
+beautifulsoup4==4.13.5
+google-api-python-client==2.187.0
+google-auth==2.41.1
+requests==2.32.5
+tzdata==2025.2
