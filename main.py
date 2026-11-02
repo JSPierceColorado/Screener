@@ -254,18 +254,20 @@ def build_atomic_update(sheet_id: int, row_count: int, rows: list[list]) -> list
 
 def update_screener(service, rows: list[list]) -> None:
     sheets = service.spreadsheets()
+    # requests.Session retries do not cover calls made by googleapiclient.
+    # Retry transient Sheets 429/5xx responses with randomized exponential backoff.
     metadata = sheets.get(spreadsheetId=SPREADSHEET_ID,
-                          fields="sheets(properties(sheetId,title,gridProperties(rowCount)))").execute()
+                          fields="sheets(properties(sheetId,title,gridProperties(rowCount)))").execute(num_retries=5)
     target = next((s["properties"] for s in metadata["sheets"]
                    if s["properties"]["title"] == SHEET_NAME), None)
     if target is None:
         raise RuntimeError(f"Missing {SHEET_NAME!r} tab. Refusing to write")
     headers = sheets.values().get(spreadsheetId=SPREADSHEET_ID,
-                                  range=f"'{SHEET_NAME}'!A1:G1").execute().get("values", [[]])[0]
+                                  range=f"'{SHEET_NAME}'!A1:G1").execute(num_retries=5).get("values", [[]])[0]
     if headers != EXPECTED_HEADERS:
         raise RuntimeError(f"Unexpected Screener headers: {headers!r}; refusing to write")
     requests_batch = build_atomic_update(target["sheetId"], target["gridProperties"]["rowCount"], rows)
-    sheets.batchUpdate(spreadsheetId=SPREADSHEET_ID, body={"requests": requests_batch}).execute()
+    sheets.batchUpdate(spreadsheetId=SPREADSHEET_ID, body={"requests": requests_batch}).execute(num_retries=5)
 
 
 def refresh(session: requests.Session | None = None, *, force: bool = False, now: datetime | None = None) -> bool:
@@ -290,8 +292,10 @@ def scheduled_refresh() -> None:
     try:
         refresh()
     except Exception:
-        # No swallowed failures: errors remain visible in Railway deploy logs.
         LOG.exception("Daily V2 S&P 100 refresh FAILED")
+        # Re-raise so APScheduler correctly records the job as failed.
+        # APScheduler will still schedule the next weekday occurrence.
+        raise
 
 
 def main() -> None:
