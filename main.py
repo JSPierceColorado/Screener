@@ -1,9 +1,9 @@
-"""Original V2 S&P100 daily screener, 9 AM America/Denver.
+"""V2 daily S&P100 screener — continuously running 9AM Mountain scheduler.
 
-Railway cron is UTC; it fires at 15:00 and 16:00 UTC on weekdays. A
-Denver-local 9 AM guard permits exactly one scheduled daily scan across
-MST/MDT, subject to Alpaca's NYSE calendar and open market clock.
-Uses only the last COMPLETED daily bar. Screener!G formulas remain untouched.
+One long-running Railway worker schedules one scan each trading weekday at
+09:00 America/Denver via APScheduler, automatically following daylight saving.
+Manual --once --force runs a one-off integrity check outside that schedule.
+Only the last COMPLETED daily bar is used. Screener!G remains untouched.
 """
 
 from __future__ import annotations
@@ -118,12 +118,10 @@ def alpaca_trading_base() -> str:
 
 
 def within_original_daily_scan_window(now: datetime) -> bool:
-    """Allow the original single 9 AM Mountain daily run, including DST.
+    """Confirm this is a scheduled 9 AM Mountain scan, across MST/MDT.
 
-    Railway UTC cron schedules both 15:00 and 16:00 UTC on weekdays.
-    Only one maps to 09:00–09:59 Denver on any given trading day.
-    The one-hour grace period accommodates minor Railway cron delays.
-    Calendar/market-clock checks still skip exchange closures.
+    Called by the daily APScheduler job as a secondary safeguard. A manual
+    --once --force command explicitly bypasses this date/time restriction.
     """
     local = now.astimezone(DENVER)
     return local.weekday() < 5 and local.hour == 9
@@ -307,19 +305,40 @@ def refresh(session: requests.Session | None = None, *, force: bool = False, now
     return True
 
 
+def scheduled_refresh() -> None:
+    """Catch one scheduled failure so the worker remains alive next day."""
+    try:
+        done=refresh(force=False)
+        LOG.info("V2_DAILY_SCHEDULE_COMPLETED refreshed=%s",done)
+    except Exception:
+        LOG.exception("V2_DAILY_SCHEDULE_FAILED; next daily run remains scheduled")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--once", action="store_true",
-                        help="Kept for backward compatibility; one-shot is always the default")
+                        help="Run a single manual check rather than scheduling daily refreshes")
     parser.add_argument("--force", action="store_true",
-                        help="For manual tests only: refresh even if the exchange is closed")
+                        help="Manual check only: bypass calendar and hour guard, retain closed daily bar")
     args = parser.parse_args()
-    logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"),
+    logging.basicConfig(level=os.environ.get("LOG_LEVEL","INFO"),
                         format="%(asctime)s %(levelname)s %(name)s %(message)s")
     if args.force and not args.once:
         parser.error("--force requires --once")
-    completed=refresh(force=args.force)
-    LOG.info("V2_DAILY_CYCLE_DONE refreshed=%s; exiting until next scheduled trading day",completed)
+    if args.once:
+        result=refresh(force=args.force)
+        LOG.info("V2_MANUAL_RUN_COMPLETED refreshed=%s force=%s",result,args.force)
+        return
+    from apscheduler.schedulers.blocking import BlockingScheduler
+    scheduler=BlockingScheduler(
+        timezone=DENVER,
+        job_defaults={"coalesce":True,"max_instances":1,"misfire_grace_time":1800})
+    scheduler.add_job(scheduled_refresh,"cron",day_of_week="mon-fri",
+                      hour=9,minute=0,id="v2_daily_9am_denver",
+                      replace_existing=True)
+    LOG.info("V2_SCHEDULER_RUNNING daily=09:00 America/Denver, only completed bars; "
+             "live positions/order submission=NONE")
+    scheduler.start()
 
 
 if __name__ == "__main__":
