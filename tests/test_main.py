@@ -172,3 +172,42 @@ def test_one_shot_entrypoint_exits_and_is_not_persistent_worker(monkeypatch):
     monkeypatch.setattr(main,"refresh",lambda **kwargs:False)
     monkeypatch.setattr("sys.argv",["main.py","--once"])
     main.main()  # returns; does not enter the old APScheduler loop
+
+
+def test_persistent_scheduler_uses_original_timezone_and_hour(monkeypatch):
+    import sys
+    import types
+    scheduled={}
+    class StubScheduler:
+        def __init__(self, **kwargs):
+            scheduled["init"]=kwargs
+        def add_job(self, callback, kind, **kwargs):
+            scheduled["job"]=(callback,kind,kwargs)
+        def start(self):
+            scheduled["started"]=True
+    import apscheduler.schedulers.blocking as blocking
+    monkeypatch.setattr(blocking,"BlockingScheduler",StubScheduler)
+    monkeypatch.setattr(sys,"argv",["main.py"])
+    main.main()
+    assert scheduled["started"] is True
+    assert scheduled["init"]["timezone"]==main.DENVER
+    callback,kind,options=scheduled["job"]
+    assert kind=="cron"
+    assert (options["hour"],options["minute"],options["day_of_week"])==(9,0,"mon-fri")
+    assert callback==main.scheduled_refresh
+
+
+def test_manual_force_can_refresh_outside_time_guard(monkeypatch):
+    import sys
+    observed=[]
+    monkeypatch.setattr(main,"refresh",lambda **kwargs:observed.append(kwargs) or True)
+    monkeypatch.setattr(sys,"argv",["main.py","--once","--force"])
+    main.main()
+    assert observed==[{"force":True}]
+
+
+def test_failed_scheduled_check_does_not_stop_future_scheduler(monkeypatch):
+    def fail(**kwargs):
+        raise RuntimeError("mock public API temporarily unavailable")
+    monkeypatch.setattr(main,"refresh",fail)
+    main.scheduled_refresh()  # failure is reported but scheduler stays alive
