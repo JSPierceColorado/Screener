@@ -211,3 +211,43 @@ def test_failed_scheduled_check_does_not_stop_future_scheduler(monkeypatch):
         raise RuntimeError("mock public API temporarily unavailable")
     monkeypatch.setattr(main,"refresh",fail)
     main.scheduled_refresh()  # failure is reported but scheduler stays alive
+
+
+def test_market_session_marker_validates_recent_consensus():
+    from datetime import date
+    recent=[{"t":"2026-11-06T05:00:00Z"}]*252
+    bars={f"SYM{i}":list(recent) for i in range(101)}
+    assert main.validated_completed_session(bars,list(bars),date(2026,11,9))=="2026-11-06"
+
+
+def test_old_or_partial_daily_data_cannot_publish_marker():
+    from datetime import date
+    stale=[{"t":"2026-10-21T04:00:00Z"}]*252
+    bars={f"SYM{i}":list(stale) for i in range(101)}
+    with pytest.raises(RuntimeError,match="Stale"):
+        main.validated_completed_session(bars,list(bars),date(2026,11,9))
+    partial=[{"t":"2026-11-09T05:00:00Z"}]*252
+    with pytest.raises(RuntimeError,match="Partial"):
+        main.validated_completed_session(
+            {f"SYM{i}":list(partial) for i in range(101)},
+            [f"SYM{i}" for i in range(101)],date(2026,11,9))
+
+
+def test_screener_health_stamp_same_atomic_batch_preserves_g():
+    service=Mock()
+    sheets=service.spreadsheets.return_value
+    sheets.get.return_value.execute.return_value={"sheets":[
+        {"properties":{"title":"Screener","sheetId":0,
+                       "gridProperties":{"rowCount":13042}}}
+    ]}
+    sheets.values.return_value.get.return_value.execute.return_value={
+        "values":[main.EXPECTED_HEADERS]}
+    main.update_screener(service,[["AAPL",200,180,190,.5,200]],
+       scan_utc="2026-11-09T16:05:00+00:00",completed_session="2026-11-06")
+    operations=sheets.batchUpdate.call_args.kwargs["body"]["requests"]
+    assert len(operations)==3
+    assert operations[0]["updateCells"]["range"]["endColumnIndex"]==6
+    assert operations[1]["updateCells"]["start"]["columnIndex"]==0
+    stamp=operations[2]["updateCells"]
+    assert stamp["start"]["columnIndex"]==8
+    assert stamp["rows"][1]["values"][1]["userEnteredValue"]["stringValue"]=="2026-11-06"

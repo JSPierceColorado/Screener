@@ -14,8 +14,9 @@ import logging
 import math
 import os
 import re
-from datetime import datetime, timedelta, time
+from datetime import datetime, timedelta, time, timezone
 from statistics import mean
+from collections import Counter
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -224,6 +225,36 @@ def calculate_rows(symbols: list[str], bars_by_symbol: dict[str, list[dict]]) ->
     return rows, missing
 
 
+def validated_completed_session(bars_by_symbol: dict[str,list[dict]], symbols:list[str],
+                                today_ny) -> str:
+    """Demand a recent, broadly shared completed session before updating scores.
+
+    The buyer must never use an old sheet merely because today's scheduled
+    Python function fired. Disallow bar sets where <95 symbols share a date.
+    """
+    latest=[]
+    for sym in symbols:
+        seq=bars_by_symbol.get(sym,[])
+        if len(seq)<252:
+            continue
+        raw=seq[-1].get("t")
+        if not isinstance(raw,str):
+            raise RuntimeError("Missing daily market bar timestamp")
+        dt=datetime.fromisoformat(raw.replace("Z","+00:00"))
+        if dt.tzinfo is None:
+            raise RuntimeError("Daily bar date is timezone naive")
+        d=dt.astimezone(NEW_YORK).date()
+        if d>=today_ny:
+            raise RuntimeError("Partial current-day bar detected")
+        latest.append(d)
+    if not latest:
+        raise RuntimeError("No completed-session bars")
+    date,count=Counter(latest).most_common(1)[0]
+    if count<95 or (today_ny-date).days>7:
+        raise RuntimeError("Stale/incomplete completed daily market session")
+    return date.isoformat()
+
+
 def build_sheets_client():
     from google.oauth2 import service_account
     from googleapiclient.discovery import build
@@ -265,7 +296,8 @@ def build_atomic_update(sheet_id: int, row_count: int, rows: list[list]) -> list
     ]
 
 
-def update_screener(service, rows: list[list]) -> None:
+def update_screener(service, rows: list[list], *, scan_utc: str | None = None,
+                    completed_session: str | None = None) -> None:
     sheets = service.spreadsheets()
     # requests.Session retries do not cover calls made by googleapiclient.
     # Retry transient Sheets 429/5xx responses with randomized exponential backoff.
@@ -280,6 +312,22 @@ def update_screener(service, rows: list[list]) -> None:
     if headers != EXPECTED_HEADERS:
         raise RuntimeError(f"Unexpected Screener headers: {headers!r}; refusing to write")
     requests_batch = build_atomic_update(target["sheetId"], target["gridProperties"]["rowCount"], rows)
+    if (scan_utc is None)!=(completed_session is None):
+        raise ValueError("Scan metadata must have timestamp and data-session date")
+    if scan_utc:
+        # Metadata is in I:J and in the SAME atomic Sheets write as A:F.
+        # G (original score formula) and H remain untouched.
+        datetime.fromisoformat(scan_utc.replace("Z","+00:00"))
+        datetime.fromisoformat(completed_session)
+        def stringcell(s):
+            return {"userEnteredValue":{"stringValue":s}}
+        requests_batch.append({"updateCells":{
+            "start":{"sheetId":target["sheetId"],"rowIndex":0,"columnIndex":8},
+            "rows":[{"values":[stringcell("last_scan_utc"),
+                                stringcell("completed_session_date")]},
+                    {"values":[stringcell(scan_utc),stringcell(completed_session)]}],
+            "fields":"userEnteredValue"
+        }})
     sheets.batchUpdate(spreadsheetId=SPREADSHEET_ID, body={"requests": requests_batch}).execute(num_retries=5)
 
 
@@ -299,9 +347,13 @@ def refresh(session: requests.Session | None = None, *, force: bool = False, now
     LOG.info("Current online S&P 100 constituent list: %d symbols", len(symbols))
     bars_by_symbol = get_daily_bars(session, symbols, current_date)
     rows, missing = calculate_rows(symbols, bars_by_symbol)
+    completed_session = validated_completed_session(bars_by_symbol,symbols,current_date)
     LOG.info("Fetched %d good symbols; %d lacking full history: %s", len(rows)-len(missing), len(missing), missing)
-    update_screener(build_sheets_client(), rows)
-    LOG.info("SUCCESS: cleared old A:F and replaced with %d S&P 100 symbols (G untouched) at %s", len(rows), now.isoformat())
+    update_screener(build_sheets_client(), rows,
+                    scan_utc=now.astimezone(timezone.utc).isoformat(),
+                    completed_session=completed_session)
+    LOG.info("SUCCESS: refreshed %d S&P100 symbols, completed_session=%s and scan timestamp; G untouched at %s",
+             len(rows), completed_session, now.isoformat())
     return True
 
 
