@@ -215,7 +215,7 @@ def test_failed_scheduled_check_does_not_stop_future_scheduler(monkeypatch):
 
 def test_market_session_marker_validates_recent_consensus():
     from datetime import date
-    recent=[{"t":"2026-11-06T04:00:00Z"}]*252
+    recent=[{"t":"2026-11-06T05:00:00Z"}]*252
     bars={f"SYM{i}":list(recent) for i in range(101)}
     assert main.validated_completed_session(bars,list(bars),date(2026,11,9))=="2026-11-06"
 
