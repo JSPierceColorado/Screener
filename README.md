@@ -1,6 +1,6 @@
 # V2 — S&P 100 Alpaca Screener (Railway)
 
-**Continuous worker**, scheduled for **9:00 AM America/Denver** on weekdays, and gated by the Alpaca **US stock market calendar and live market-open clock** so US market holidays, early closures, and unexpected off-hours are skipped. Handles MDT/MST automatically. No Railway cron schedule: Railway's cron expressions use UTC and cannot directly follow Mountain daylight-saving changes.
+**Short-lived hourly Railway Cron job** using `35 13-20 * * 1-5` (UTC). That covers **9:35, 10:35, 11:35, 12:35, 1:35, 2:35, 3:35 p.m./a.m. Eastern as appropriate**, plus one off-hours no-op per day across the DST seasons. The program gates on 09:30–16:00 New York local time and Alpaca's live calendar/market-open clock, so holidays, early closes and EST/EDT are handled automatically. Railway starts one process per cron invocation; it exits after the refresh or skip, so it does not run 24/7.
 
 ## Output: existing V2 `Screener` tab
 
@@ -14,7 +14,7 @@
 | F | `dollar_vol_m` | 20-session average of `daily_close × daily_share_volume / 1,000,000` |
 | G | `score` | **NEVER CLEARED OR WRITTEN** (existing formulas remain in place) |
 
-The 9 AM Mountain run is at 11 AM Eastern, during the current trading session. To avoid mixing partial daily bars into 50-/200-day moving averages, the values use **the last completed trading session**, not live intraday prices.
+Each successful hourly run computes the same original V2 formula using **the last completed daily market session**, not live intraday prices. **Consequently values generally remain unchanged during the same trading day.** This is a scheduled refresh, not an intraday momentum model. To evolve intraday signals we should separately specify a compatible price/volume methodology.
 
 Each run retrieves the current Symbols table from https://en.wikipedia.org/wiki/S%26P_100, so index changes follow that *community-maintained* page's updates (not an official index reconstitution feed). S&P 100 has historically contained 101 symbols owing to dual share classes. Validate table structure, 95–110 unique symbols, and Alpaca data availability before modifying the Sheet. Source unavailable, schema changed, Alpaca access denied or too few valid ticker bars? **Fail closed and keep existing data.** Never silently fall back to a stale hardcoded ticker list.
 
@@ -32,10 +32,10 @@ Both changes are in the same batch request. `G` is outside every range, so the `
 ## Setup
 
 1. Create a Google Cloud project, enable the **Google Sheets API**, create a service account, and download its **JSON key**. Share the existing V2 Google Sheet (link below) with the JSON key's `client_email`, permission **Editor**. **Do not** paste any secrets in GitHub.
-2. Create a **private** GitHub repository, upload this repository's files, and connect the repository to a new **Railway service**. Railway should detect and build the Dockerfile.
+2. Use the existing private `JSPierceColorado/Screener` GitHub repository and connect it to a distinct `V2-Screener` Railway service; do not repurpose your separate credential-vault service. Railway should detect and build the Dockerfile.
 3. In Railway service **Variables**, set `APCA_API_KEY_ID`, `APCA_API_SECRET_KEY`, and `GOOGLE_SERVICE_ACCOUNT_JSON` (raw JSON on one line, including the `private_key` escaped `\n` sequences). Set `ALPACA_TRADING_BASE_URL` to the correct environment for your Alpaca key; default is paper API. Set `GOOGLE_SHEET_ID` if you ever use another workbook.
 4. For a SIP-entitled account keep `ALPACA_DATA_FEED=sip`. Otherwise you may use `iex`, understanding that its volume metric is incomplete relative to the consolidated market.
-5. **Deploy as an always-on Worker**; do **not** configure a Railway Cron Schedule, do not enable sleep, and use **one replica** to avoid duplicate schedules. The process stays alive between runs. Watch **Railway Deploy Logs** for the scheduler startup and successful run messages.
+5. **Deploy as a Railway Cron job** with `Cron Schedule = 35 13-20 * * 1-5`, `Start Command = python -u main.py --once`, `Restart policy = NEVER`, and one replica. Railway evaluates cron in UTC, but the code gates the actual NYSE session in America/New_York. Watch Railway deployment logs for `V2_HOURLY_CYCLE_DONE` and `SUCCESS` or `SKIPPED_NYSE` messages.
 6. Optional manual execution from a Railway shell/local project: `python main.py --once` (market-calendar and market-open checks) or `python main.py --once --force` (manual refresh even on a closed day; uses previous session data).
 
 **Target Sheet:** https://docs.google.com/spreadsheets/d/14-Fvk8YruHeGB95lyrWtjj-KfQ-AkIjSyAf5gQdHDFQ/edit
@@ -55,6 +55,10 @@ Both changes are in the same batch request. `G` is outside every range, so the `
 pip install -r requirements.txt pytest
 pytest -q
 ```
+
+### Hourly schedule details
+
+Railway UTC Cron: `35 13-20 * * 1-5`. Summer: 13:35–19:35 UTC is 09:35–15:35 ET, 20:35 UTC skips. Winter: 13:35 UTC skips, 14:35–20:35 UTC is 09:35–15:35 ET. Seven possible NYSE-hour refreshes per full trading day, zero on a closed exchange. The exact minute can vary slightly because Railway Cron starts may be delayed.
 
 ### Notes
 
