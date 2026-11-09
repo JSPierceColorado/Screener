@@ -1,6 +1,8 @@
-"""V2 S&P 100 -> Alpaca -> Google Sheets, weekdays at 09:00 America/Denver.
+"""Original V2 S&P100 screener, invoked hourly from Railway Cron.
 
-A:F is replaced in one atomic Sheets batchUpdate. G and other tabs are untouched.
+The worker runs once, verifies the NYSE market session and exits; a Railway
+UTC cron covers both EST and EDT and the live Alpaca clock gates off-hours.
+Only Screener!A:F is atomically replaced; formula column G is preserved.
 """
 
 from __future__ import annotations
@@ -112,6 +114,17 @@ def alpaca_trading_base() -> str:
     if not base.startswith("https://"):
         raise ValueError("ALPACA_TRADING_BASE_URL must be HTTPS")
     return base
+
+
+def within_regular_market_window(now: datetime) -> bool:
+    """Permit 09:30–16:00 NY time; handles EST/EDT automatically.
+
+    Railway UTC cron includes one extra early/late invocation depending
+    on DST. This guard skips it, and Alpaca calendar/clock catches holidays
+    and early closes.
+    """
+    ny = now.astimezone(NEW_YORK)
+    return ny.weekday() < 5 and time(9, 30) <= ny.time().replace(tzinfo=None) < time(16, 0)
 
 
 def is_market_day(session: requests.Session, current_date) -> bool:
@@ -274,8 +287,11 @@ def refresh(session: requests.Session | None = None, *, force: bool = False, now
     session = session or http_session()
     now = now or datetime.now(DENVER)
     current_date = now.astimezone(NEW_YORK).date()
+    if not force and not within_regular_market_window(now):
+        LOG.info("SKIPPED_OUTSIDE_NYSE_SESSION: ny_time=%s",now.astimezone(NEW_YORK).isoformat())
+        return False
     if not force and not is_market_day(session, current_date):
-        LOG.info("Market closed on %s; no changes made", current_date)
+        LOG.info("SKIPPED_NYSE_CALENDAR_OR_CLOCK: date=%s", current_date)
         return False
     # IMPORTANT: Obtain and validate EVERY input before any Sheet writes.
     symbols = get_sp100_symbols(session)
@@ -288,38 +304,19 @@ def refresh(session: requests.Session | None = None, *, force: bool = False, now
     return True
 
 
-def scheduled_refresh() -> None:
-    try:
-        refresh()
-    except Exception:
-        LOG.exception("Daily V2 S&P 100 refresh FAILED")
-        # Re-raise so APScheduler correctly records the job as failed.
-        # APScheduler will still schedule the next weekday occurrence.
-        raise
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--once", action="store_true", help="Run exactly once, respecting market calendar")
-    parser.add_argument("--force", action="store_true", help="With --once only, bypass calendar for a manual test")
+    parser.add_argument("--once", action="store_true",
+                        help="Kept for backward compatibility; one-shot is always the default")
+    parser.add_argument("--force", action="store_true",
+                        help="For manual tests only: refresh even if the exchange is closed")
     args = parser.parse_args()
     logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"),
                         format="%(asctime)s %(levelname)s %(name)s %(message)s")
     if args.force and not args.once:
         parser.error("--force requires --once")
-    if args.once:
-        refresh(force=args.force)
-        return
-    from apscheduler.schedulers.blocking import BlockingScheduler
-    from apscheduler.triggers.cron import CronTrigger
-
-    scheduler = BlockingScheduler(timezone=DENVER)
-    scheduler.add_job(scheduled_refresh,
-                      trigger=CronTrigger(day_of_week="mon-fri", hour=9, minute=0, timezone=DENVER),
-                      id="v2_sp100_9am_mountain", max_instances=1, coalesce=True,
-                      misfire_grace_time=300, replace_existing=True)
-    LOG.info("Worker online. Scheduled 09:00 America/Denver on NYSE trading days; waiting for next run")
-    scheduler.start()
+    completed=refresh(force=args.force)
+    LOG.info("V2_HOURLY_CYCLE_DONE refreshed=%s; exiting so Railway can schedule next run",completed)
 
 
 if __name__ == "__main__":
