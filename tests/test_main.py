@@ -121,27 +121,51 @@ def test_open_session_and_market_clock(monkeypatch):
     assert session.get.call_count == 2
 
 
-def test_hourly_nyse_window_handles_both_dst_seasons():
-    from zoneinfo import ZoneInfo
+def test_original_daily_9am_mountain_window_handles_dst():
     utc = timezone.utc
-    # The same Railway UTC :35 window covers both EST and EDT.
-    assert main.within_regular_market_window(datetime(2026, 7, 6, 13, 35, tzinfo=utc))
-    assert main.within_regular_market_window(datetime(2026, 7, 6, 19, 35, tzinfo=utc))
-    assert not main.within_regular_market_window(datetime(2026, 7, 6, 20, 35, tzinfo=utc))
-    assert not main.within_regular_market_window(datetime(2026, 11, 9, 13, 35, tzinfo=utc))
-    assert main.within_regular_market_window(datetime(2026, 11, 9, 14, 35, tzinfo=utc))
-    assert main.within_regular_market_window(datetime(2026, 11, 9, 20, 35, tzinfo=utc))
-    assert not main.within_regular_market_window(datetime(2026, 11, 8, 14, 35, tzinfo=utc))
+    # Mountain Daylight Time: 15:00 UTC = 09:00 MDT.
+    assert main.within_original_daily_scan_window(
+        datetime(2026, 7, 6, 15, 0, tzinfo=utc))
+    assert main.within_original_daily_scan_window(
+        datetime(2026, 7, 6, 15, 40, tzinfo=utc))
+    assert not main.within_original_daily_scan_window(
+        datetime(2026, 7, 6, 16, 0, tzinfo=utc))
+    # Mountain Standard Time: 16:00 UTC = 09:00 MST.
+    assert not main.within_original_daily_scan_window(
+        datetime(2026, 11, 9, 15, 0, tzinfo=utc))
+    assert main.within_original_daily_scan_window(
+        datetime(2026, 11, 9, 16, 0, tzinfo=utc))
+    assert not main.within_original_daily_scan_window(
+        datetime(2026, 11, 9, 17, 0, tzinfo=utc))
+    # Weekends never refresh.
+    assert not main.within_original_daily_scan_window(
+        datetime(2026, 11, 8, 16, 0, tzinfo=utc))
 
 
-def test_outside_regular_market_hours_skips_without_api_or_sheet(monkeypatch):
-    def dangerous(*args,**kwargs):
-        raise AssertionError("Outside-hours scan should never touch Alpaca, Wikipedia or Sheets")
+def test_early_or_late_utc_cron_invocation_skips_without_api_or_sheet(monkeypatch):
+    def dangerous(*args, **kwargs):
+        raise AssertionError("Skipped cron invocation must not call Alpaca, Wikipedia or Sheets")
     monkeypatch.setattr(main,"is_market_day",dangerous)
     monkeypatch.setattr(main,"get_sp100_symbols",dangerous)
     monkeypatch.setattr(main,"update_screener",dangerous)
-    assert main.refresh(session=Mock(),now=datetime(2026,11,9,13,35,tzinfo=timezone.utc)) is False
-    assert main.refresh(session=Mock(),now=datetime(2026,7,6,20,35,tzinfo=timezone.utc)) is False
+    # Summer second cron at 10am Denver, winter first at 8am Denver.
+    assert main.refresh(session=Mock(),
+        now=datetime(2026,7,6,16,0,tzinfo=timezone.utc)) is False
+    assert main.refresh(session=Mock(),
+        now=datetime(2026,11,9,15,0,tzinfo=timezone.utc)) is False
+
+
+def test_daily_guard_allows_the_original_9am_mountain_before_alpaca_checks(monkeypatch):
+    sentinel=[]
+    def mock_market_day(session, date):
+        sentinel.append(date.isoformat())
+        return False
+    monkeypatch.setattr(main,"is_market_day",mock_market_day)
+    monkeypatch.setattr(main,"get_sp100_symbols",
+                        lambda *_: pytest.fail("Calendar says closed; must not read symbols"))
+    assert main.refresh(session=Mock(),
+        now=datetime(2026,11,9,16,0,tzinfo=timezone.utc)) is False
+    assert sentinel==["2026-11-09"]
 
 
 def test_one_shot_entrypoint_exits_and_is_not_persistent_worker(monkeypatch):

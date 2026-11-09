@@ -1,8 +1,9 @@
-"""Original V2 S&P100 screener, invoked hourly from Railway Cron.
+"""Original V2 S&P100 daily screener, 9 AM America/Denver.
 
-The worker runs once, verifies the NYSE market session and exits; a Railway
-UTC cron covers both EST and EDT and the live Alpaca clock gates off-hours.
-Only Screener!A:F is atomically replaced; formula column G is preserved.
+Railway cron is UTC; it fires at 15:00 and 16:00 UTC on weekdays. A
+Denver-local 9 AM guard permits exactly one scheduled daily scan across
+MST/MDT, subject to Alpaca's NYSE calendar and open market clock.
+Uses only the last COMPLETED daily bar. Screener!G formulas remain untouched.
 """
 
 from __future__ import annotations
@@ -116,15 +117,16 @@ def alpaca_trading_base() -> str:
     return base
 
 
-def within_regular_market_window(now: datetime) -> bool:
-    """Permit 09:30–16:00 NY time; handles EST/EDT automatically.
+def within_original_daily_scan_window(now: datetime) -> bool:
+    """Allow the original single 9 AM Mountain daily run, including DST.
 
-    Railway UTC cron includes one extra early/late invocation depending
-    on DST. This guard skips it, and Alpaca calendar/clock catches holidays
-    and early closes.
+    Railway UTC cron schedules both 15:00 and 16:00 UTC on weekdays.
+    Only one maps to 09:00–09:59 Denver on any given trading day.
+    The one-hour grace period accommodates minor Railway cron delays.
+    Calendar/market-clock checks still skip exchange closures.
     """
-    ny = now.astimezone(NEW_YORK)
-    return ny.weekday() < 5 and time(9, 30) <= ny.time().replace(tzinfo=None) < time(16, 0)
+    local = now.astimezone(DENVER)
+    return local.weekday() < 5 and local.hour == 9
 
 
 def is_market_day(session: requests.Session, current_date) -> bool:
@@ -287,8 +289,9 @@ def refresh(session: requests.Session | None = None, *, force: bool = False, now
     session = session or http_session()
     now = now or datetime.now(DENVER)
     current_date = now.astimezone(NEW_YORK).date()
-    if not force and not within_regular_market_window(now):
-        LOG.info("SKIPPED_OUTSIDE_NYSE_SESSION: ny_time=%s",now.astimezone(NEW_YORK).isoformat())
+    if not force and not within_original_daily_scan_window(now):
+        LOG.info("SKIPPED_OUTSIDE_ORIGINAL_DAILY_9AM_MOUNTAIN: denver_time=%s",
+                 now.astimezone(DENVER).isoformat())
         return False
     if not force and not is_market_day(session, current_date):
         LOG.info("SKIPPED_NYSE_CALENDAR_OR_CLOCK: date=%s", current_date)
@@ -316,7 +319,7 @@ def main() -> None:
     if args.force and not args.once:
         parser.error("--force requires --once")
     completed=refresh(force=args.force)
-    LOG.info("V2_HOURLY_CYCLE_DONE refreshed=%s; exiting so Railway can schedule next run",completed)
+    LOG.info("V2_DAILY_CYCLE_DONE refreshed=%s; exiting until next scheduled trading day",completed)
 
 
 if __name__ == "__main__":
