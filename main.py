@@ -302,7 +302,7 @@ def update_screener(service, rows: list[list], *, scan_utc: str | None = None,
     # requests.Session retries do not cover calls made by googleapiclient.
     # Retry transient Sheets 429/5xx responses with randomized exponential backoff.
     metadata = sheets.get(spreadsheetId=SPREADSHEET_ID,
-                          fields="sheets(properties(sheetId,title,gridProperties(rowCount)))").execute(num_retries=5)
+                          fields="sheets(properties(sheetId,title,gridProperties(rowCount,columnCount)))").execute(num_retries=5)
     target = next((s["properties"] for s in metadata["sheets"]
                    if s["properties"]["title"] == SHEET_NAME), None)
     if target is None:
@@ -315,8 +315,15 @@ def update_screener(service, rows: list[list], *, scan_utc: str | None = None,
     if (scan_utc is None)!=(completed_session is None):
         raise ValueError("Scan metadata must have timestamp and data-session date")
     if scan_utc:
-        # Metadata is in I:J and in the SAME atomic Sheets write as A:F.
+        # Original V2 has EXACTLY 7 columns (A:G). Add I:J capacity atomically.
+        # The appendDimension operation precedes writes in the SAME batch.
         # G (original score formula) and H remain untouched.
+        present_cols=target["gridProperties"].get("columnCount",7)
+        if present_cols<10:
+            requests_batch.insert(0,{"appendDimension":{
+                "sheetId":target["sheetId"],"dimension":"COLUMNS",
+                "length":10-present_cols
+            }})
         datetime.fromisoformat(scan_utc.replace("Z","+00:00"))
         datetime.fromisoformat(completed_session)
         def stringcell(s):

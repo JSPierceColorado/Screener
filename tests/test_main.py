@@ -238,16 +238,18 @@ def test_screener_health_stamp_same_atomic_batch_preserves_g():
     sheets=service.spreadsheets.return_value
     sheets.get.return_value.execute.return_value={"sheets":[
         {"properties":{"title":"Screener","sheetId":0,
-                       "gridProperties":{"rowCount":13042}}}
+                       "gridProperties":{"rowCount":13042,"columnCount":7}}}
     ]}
     sheets.values.return_value.get.return_value.execute.return_value={
         "values":[main.EXPECTED_HEADERS]}
     main.update_screener(service,[["AAPL",200,180,190,.5,200]],
        scan_utc="2026-11-09T16:05:00+00:00",completed_session="2026-11-06")
     operations=sheets.batchUpdate.call_args.kwargs["body"]["requests"]
-    assert len(operations)==3
-    assert operations[0]["updateCells"]["range"]["endColumnIndex"]==6
-    assert operations[1]["updateCells"]["start"]["columnIndex"]==0
-    stamp=operations[2]["updateCells"]
+    assert len(operations)==4
+    assert operations[0]["appendDimension"]=={
+        "sheetId":0,"dimension":"COLUMNS","length":3}
+    assert operations[1]["updateCells"]["range"]["endColumnIndex"]==6
+    assert operations[2]["updateCells"]["start"]["columnIndex"]==0
+    stamp=operations[3]["updateCells"]
     assert stamp["start"]["columnIndex"]==8
     assert stamp["rows"][1]["values"][1]["userEnteredValue"]["stringValue"]=="2026-11-06"
