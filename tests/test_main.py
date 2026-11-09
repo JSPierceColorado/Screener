@@ -119,3 +119,32 @@ def test_open_session_and_market_clock(monkeypatch):
     session.get.side_effect = [calendar_resp, clock_resp]
     assert main.is_market_day(session, date(2026, 10, 19)) is True
     assert session.get.call_count == 2
+
+
+def test_hourly_nyse_window_handles_both_dst_seasons():
+    from zoneinfo import ZoneInfo
+    utc = timezone.utc
+    # The same Railway UTC :35 window covers both EST and EDT.
+    assert main.within_regular_market_window(datetime(2026, 7, 6, 13, 35, tzinfo=utc))
+    assert main.within_regular_market_window(datetime(2026, 7, 6, 19, 35, tzinfo=utc))
+    assert not main.within_regular_market_window(datetime(2026, 7, 6, 20, 35, tzinfo=utc))
+    assert not main.within_regular_market_window(datetime(2026, 11, 9, 13, 35, tzinfo=utc))
+    assert main.within_regular_market_window(datetime(2026, 11, 9, 14, 35, tzinfo=utc))
+    assert main.within_regular_market_window(datetime(2026, 11, 9, 20, 35, tzinfo=utc))
+    assert not main.within_regular_market_window(datetime(2026, 11, 8, 14, 35, tzinfo=utc))
+
+
+def test_outside_regular_market_hours_skips_without_api_or_sheet(monkeypatch):
+    def dangerous(*args,**kwargs):
+        raise AssertionError("Outside-hours scan should never touch Alpaca, Wikipedia or Sheets")
+    monkeypatch.setattr(main,"is_market_day",dangerous)
+    monkeypatch.setattr(main,"get_sp100_symbols",dangerous)
+    monkeypatch.setattr(main,"update_screener",dangerous)
+    assert main.refresh(session=Mock(),now=datetime(2026,11,9,13,35,tzinfo=timezone.utc)) is False
+    assert main.refresh(session=Mock(),now=datetime(2026,7,6,20,35,tzinfo=timezone.utc)) is False
+
+
+def test_one_shot_entrypoint_exits_and_is_not_persistent_worker(monkeypatch):
+    monkeypatch.setattr(main,"refresh",lambda **kwargs:False)
+    monkeypatch.setattr("sys.argv",["main.py","--once"])
+    main.main()  # returns; does not enter the old APScheduler loop
