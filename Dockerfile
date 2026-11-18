@@ -7,4 +7,5 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 COPY main.py ./
-CMD ["python", "-u", "main.py", "--once"]
+COPY marketwide_common.py marketwide_screener.py marketwide_buyer.py marketwide_service.py ./
+CMD ["python", "-u", "marketwide_service.py"]
