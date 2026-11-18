@@ -22,7 +22,7 @@ from urllib3.util.retry import Retry
 
 LOG=logging.getLogger("marketwide")
 DENVER=ZoneInfo("America/Denver")
-NEW_YORK=ZoneInfo("America/New_YORK".replace("YORK","York"))
+NEW_YORK=ZoneInfo("America/New_York")
 TRADE_BASE=os.getenv("ALPACA_TRADING_BASE_URL","https://api.alpaca.markets").rstrip("/")
 DATA_BASE="https://data.alpaca.markets/v2/stocks/bars"
 SHEET_ID=os.getenv("GOOGLE_SHEET_ID","14-Fvk8YruHeGB95lyrWtjj-KfQ-AkIjSyAf5gQdHDFQ")
