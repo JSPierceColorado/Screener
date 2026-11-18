@@ -61,7 +61,9 @@ def test_asset_filter_is_full_alpaca_stocks_not_etfs():
     assert not common.eligible_asset(asset("TQQQ","ProShares UltraPro QQQ ETF"))
     assert not common.eligible_asset(asset("QQQ","Invesco Exchange-Traded Fund"))
     assert not common.eligible_asset({**asset("OTC"),"tradable":False})
-    assert not common.eligible_asset({**asset("PENNY"),"fractionable":False})
+    assert common.eligible_asset({**asset("PENNY"),"fractionable":False})
+    # Nonfractionable stocks are screened, but the fractional-notional BUYER
+    # rejects them unless whole-share sizing is explicitly implemented.
     assert not common.eligible_asset({**asset("BTC"),"class":"crypto"})
 
 
