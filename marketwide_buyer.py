@@ -26,6 +26,7 @@ from marketwide_common import (
 
 DB_PATH="/data/marketwide_buyer.sqlite3"
 MAX_BUYS_PER_DAY=10
+MAX_TOTAL_POSITIONS=150  # Other bots' positions count toward this overall cap.
 MIN_NOTIONAL=Decimal("1.00")
 
 
@@ -234,6 +235,14 @@ def run_once(*,s=None,service=None,now=None,path=DB_PATH):
         if room==0:return {"status":"DAILY_CAP_REACHED","orders":0}
         held=held_symbols(s)
         outstanding=open_orders(s)
+        # No-stop-loss holdings can accumulate indefinitely; prevent runaway
+        # portfolio growth while still allowing more opportunities.
+        total_reserved=len(held|outstanding)
+        room=min(room,max(0,MAX_TOTAL_POSITIONS-total_reserved))
+        if room<=0:
+            LOG.warning("MARKETWIDE_GLOBAL_POSITION_CAP_REACHED held_or_open=%d cap=%d",
+                        total_reserved,MAX_TOTAL_POSITIONS)
+            return {"status":"PORTFOLIO_CAP_REACHED","orders":0}
         stopped=weekly_stops(s,now)
         account=broker_get(s,"/v2/account")
         if account.get("trading_blocked") or account.get("account_blocked"):
@@ -349,7 +358,7 @@ def main():
          hour=11,minute="0,15,30,45",id="marketwide_buy_11am",
          replace_existing=True)
     LOG.warning("MARKETWIDE_BUYER_STARTED 11:00-11:45 Denver "
-                "minimum_score=95 fraction=0.1pct_rem_margin max_daily=10 "
+                "minimum_score=95 fraction=0.1pct_rem_margin max_daily=10 portfolio_max=150 "
                 "excluded_v2_sp100=true seller=EXISTING_V2_PROFIT_ONLY live=%s",
                 test_live_permission())
     scheduler.start()
