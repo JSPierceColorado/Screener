@@ -11,6 +11,7 @@ import argparse
 import json
 import logging
 import os
+import requests
 import sqlite3
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal
