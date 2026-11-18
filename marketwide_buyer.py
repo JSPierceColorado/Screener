@@ -93,12 +93,24 @@ def data_rows(values,completed,today):
 
 
 def read_sheet(service,completed,today):
-    values=service.spreadsheets().values()
+    sh=service.spreadsheets()
+    meta=sh.get(spreadsheetId=SHEET_ID,fields=
+          "sheets(properties(title,gridProperties(rowCount,columnCount)))"
+          ).execute(num_retries=4)
+    props={x["properties"]["title"]:x["properties"]
+           for x in meta.get("sheets",[]) if x.get("properties")}
+    market_count=int(props.get(SHEET_TAB,{}).get("gridProperties",{}).get("rowCount",0))
+    v2_count=int(props.get("Screener",{}).get("gridProperties",{}).get("rowCount",0))
+    if not 1000<=market_count<=25000 or not 95<=v2_count<=150:
+        raise RuntimeError("MARKETWIDE_OR_V2_SHEET_BOUNDS_UNVERIFIABLE")
+    values=sh.values()
     # Same existing V2 workbook; separate tab for the new strategy.
-    mw=values.get(spreadsheetId=SHEET_ID,range="'"+SHEET_TAB+"'!A1:I20000"
+    mw=values.get(spreadsheetId=SHEET_ID,
+          range="'"+SHEET_TAB+"'!A1:I"+str(market_count)
          ).execute(num_retries=4).get("values",[])
     selected,summary=data_rows(mw,completed,today)
-    ref=values.get(spreadsheetId=SHEET_ID,range="'Screener'!A1:J103"
+    ref=values.get(spreadsheetId=SHEET_ID,
+          range="'Screener'!A1:J"+str(v2_count)
          ).execute(num_retries=4).get("values",[])
     if not ref or [str(x).lower() for x in ref[0][:7]]!=HEADERS[:7]:
         raise RuntimeError("V2_SCREENER_SCHEMA_UNVERIFIABLE")
@@ -349,6 +361,22 @@ def main():
     with closing(connection()) as c:
         LOG.info("MARKETWIDE_BUYER_LEDGER_READY path=%s historical_rows=%d",
                  DB_PATH,c.execute("SELECT COUNT(*) FROM orders").fetchone()[0])
+    if os.getenv("MARKETWIDE_DIAGNOSTIC_ON_START","").lower() in ("true","1"):
+        try:
+            s=session()
+            account=broker_get(s,"/v2/account")
+            today=datetime.now(DENVER).date()
+            completed=last_completed_session(s,datetime.now(NEW_YORK).date())
+            picked,stats,excluded=read_sheet(google(),completed,today)
+            LOG.warning("MARKETWIDE_BUYER_DIAGNOSTIC account_status=%s "
+                "score_session=%s stats=%s excluded=%s eligible_non_v2=%d "
+                "sample_symbols=%s market_open=%s live=%s NO_ORDERS=TRUE",
+                account.get("status"),completed,stats,excluded,len(picked),
+                [sym for sym,_ in picked[:12]],market_open(s),
+                test_live_permission())
+        except Exception:
+            LOG.exception("MARKETWIDE_BUYER_DIAGNOSTIC_FAILED; "
+                          "startup never sends any orders")
     if args.once:
         scheduled_run();return
     from apscheduler.schedulers.blocking import BlockingScheduler
