@@ -210,5 +210,7 @@ def test_seller_is_not_changed_by_marketwide_buyer():
     # Code-level invariant: new strategy contains no sell/write exit path.
     import inspect
     source=inspect.getsource(buyer)
-    assert '"side":"buy"' in source
-    assert '"side":"sell"' not in source
+    assert 'payload={"symbol":sym,"side":"buy"' in source
+    assert source.count('s.post(')==1
+    # GET history may ask for past SELL orders to honor the old cooldown.
+    # No POST ever contains a sell order payload.
