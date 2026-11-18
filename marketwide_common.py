@@ -85,7 +85,7 @@ def eligible_asset(a):
     symbol=str(a.get("symbol","")).upper().strip()
     cls=a.get("class",a.get("asset_class"))
     if (cls!="us_equity" or a.get("status")!="active" or
-        not a.get("tradable") or not a.get("fractionable") or
+        not a.get("tradable") or
         not STOCK_PATTERN.fullmatch(symbol) or symbol in RESERVED):
         return False
     return not NON_STOCK_NAME.search(str(a.get("name","")))
@@ -104,7 +104,7 @@ def assets(s):
             out[sym]=a
     if len(out)<1000:
         raise RuntimeError("MARKETWIDE_ELIGIBLE_STOCKS_TOO_FEW")
-    LOG.info("MARKETWIDE_UNIVERSE total_assets=%d active_fractionable_stocks=%d",
+    LOG.info("MARKETWIDE_UNIVERSE total_assets=%d active_tradable_stocks=%d",
              len(data),len(out))
     return out
 
